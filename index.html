@@ -340,12 +340,41 @@ body {
 .period-card {
   background: var(--card2); border: 2px solid var(--border);
   border-radius: var(--radius); padding: 12px; margin-bottom: 8px;
-  cursor: pointer; transition: all 0.25s;
+  transition: all 0.25s;
   display: flex; align-items: center; justify-content: space-between;
 }
 .period-card:hover { border-color: var(--gold); }
 .period-card .pc-name { font-weight: 800; font-size: 0.9rem; }
 .period-card .pc-date { font-size: 0.72rem; color: var(--text-muted); }
+.period-card-click { flex:1; cursor:pointer; }
+.period-card-del { background:none;border:none;color:var(--red);cursor:pointer;padding:4px 8px;font-size:1rem;opacity:0.6;transition:opacity 0.2s;flex-shrink:0; }
+.period-card-del:hover { opacity:1; }
+
+/* BUDGET ASSIGN MODAL */
+.assign-row {
+  display:flex; align-items:center; gap:8px; padding:10px;
+  background:var(--navy); border-radius:10px; margin-bottom:8px;
+}
+.assign-row-label { flex:1; font-size:0.82rem; font-weight:700; }
+.assign-row-meta { font-size:0.68rem; color:var(--text-muted); }
+.assign-row input { width:110px; padding:7px 10px; background:var(--card2); border:1.5px solid var(--border); border-radius:8px; color:var(--text); font-family:'Nunito'; font-weight:700; font-size:0.85rem; }
+.assign-row input:focus { outline:none; border-color:var(--gold); }
+.assign-remaining {
+  background:rgba(17,138,178,0.13); border:1.5px solid var(--blue);
+  border-radius:10px; padding:10px 14px; margin-top:10px; margin-bottom:4px;
+  font-size:0.82rem; font-weight:700; text-align:center;
+}
+
+/* PREV EXPENSES in form */
+.prev-expense-list {
+  background:var(--navy); border-radius:10px; padding:8px 10px; margin-bottom:8px;
+}
+.prev-expense-item {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:4px 0; border-bottom:1px solid var(--border); font-size:0.75rem;
+}
+.prev-expense-item:last-child { border-bottom:none; }
+.prev-expense-total { font-size:0.8rem; font-weight:900; color:var(--red); margin-top:4px; }
 
 /* BUDGET PROGRESS */
 .budget-row { margin-bottom: 10px; }
@@ -449,6 +478,26 @@ body {
   </div>
 </div>
 
+<!-- BUDGET ASSIGNMENT MODAL -->
+<div class="modal-overlay" id="assign-modal">
+  <div class="modal-box">
+    <div class="modal-title"><i class="fas fa-sliders"></i> Asignación de Gastos por Rubro</div>
+    <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:12px;">
+      Distribuye tus ingresos asignando un valor a cada rubro de gasto. El sistema te mostrará cuánto te queda disponible para asignar.
+    </p>
+    <div class="assign-remaining" id="assign-remaining-bar">
+      💵 Ingresos: <strong id="ar-income">$0.00</strong> &nbsp;|&nbsp;
+      📋 Asignado: <strong id="ar-assigned">$0.00</strong> &nbsp;|&nbsp;
+      ✅ Disponible: <strong id="ar-available" style="color:var(--green);">$0.00</strong>
+    </div>
+    <div id="assign-rows-container" style="margin-top:10px;max-height:55vh;overflow-y:auto;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-gold flex-1" onclick="saveAssignments()"><i class="fas fa-save"></i> Guardar Asignaciones</button>
+      <button class="btn btn-outline flex-1" onclick="closeModal('assign-modal')">Cancelar</button>
+    </div>
+  </div>
+</div>
+
 <!-- CONFIRM MODAL -->
 <div class="modal-overlay" id="confirm-modal">
   <div class="modal-box">
@@ -523,6 +572,9 @@ body {
       <div class="header-actions">
         <button class="icon-btn" onclick="showModal('period-modal')" title="Cambiar registro">
           <i class="fas fa-folder-open"></i>
+        </button>
+        <button class="icon-btn" onclick="openAssignModal()" title="Asignación de Gastos" style="background:rgba(17,138,178,0.2);border-color:var(--blue);">
+          <i class="fas fa-sliders" style="color:var(--blue)"></i>
         </button>
         <button class="icon-btn" onclick="exportExcel()" title="Exportar Excel">
           <i class="fas fa-file-excel" style="color:#1d6f42"></i>
@@ -664,6 +716,13 @@ body {
           <label>🏢 Alícuota</label>
           <input type="number" class="form-control" id="alq-alicuota" value="40" step="0.01">
         </div>
+      </div>
+
+      <!-- Previous expenses for this category -->
+      <div id="prev-expenses-wrap" style="display:none;">
+        <div class="card-title" style="font-size:0.75rem;color:var(--text-muted);margin-bottom:6px;"><i class="fas fa-history"></i> Gastos anteriores en este rubro</div>
+        <div class="prev-expense-list" id="prev-expense-list"></div>
+        <div class="hint available-money" id="category-available-hint" style="margin-bottom:6px;"></div>
       </div>
 
       <!-- Budget assigned (for expense categories) -->
@@ -947,6 +1006,65 @@ function saveSettings() {
 }
 
 // ============================================================
+// BUDGET ASSIGNMENT MODAL
+// ============================================================
+function openAssignModal() {
+  if (!STATE.currentPeriodId) { showToast('Selecciona un registro primero', 'error'); return; }
+  const cats = STATE.settings.expenseTypes || [];
+  const container = document.getElementById('assign-rows-container');
+  container.innerHTML = cats.map(cat => {
+    const assigned = STATE.budgets[cat]?.assigned || 0;
+    const spent = calcCategorySpent(cat);
+    return `<div class="assign-row">
+      <div style="flex:1;">
+        <div class="assign-row-label">${cat}</div>
+        <div class="assign-row-meta">Gastado: $${spent.toFixed(2)}</div>
+      </div>
+      <input type="number" id="ar-${cat.replace(/\s/g,'_')}" value="${assigned||''}" placeholder="$0.00" step="0.01"
+        oninput="updateAssignRemaining()" style="width:110px;">
+    </div>`;
+  }).join('');
+  updateAssignRemaining();
+  showModal('assign-modal');
+}
+
+function updateAssignRemaining() {
+  const cats = STATE.settings.expenseTypes || [];
+  const income = calcTotalIncome();
+  let totalAssigned = 0;
+  cats.forEach(cat => {
+    const el = document.getElementById('ar-'+cat.replace(/\s/g,'_'));
+    if (el) totalAssigned += parseFloat(el.value)||0;
+  });
+  const available = income - totalAssigned;
+  document.getElementById('ar-income').textContent = `$${income.toFixed(2)}`;
+  document.getElementById('ar-assigned').textContent = `$${totalAssigned.toFixed(2)}`;
+  const avEl = document.getElementById('ar-available');
+  avEl.textContent = `$${available.toFixed(2)}`;
+  avEl.style.color = available < 0 ? 'var(--red)' : 'var(--green)';
+}
+
+function saveAssignments() {
+  const cats = STATE.settings.expenseTypes || [];
+  cats.forEach(cat => {
+    const el = document.getElementById('ar-'+cat.replace(/\s/g,'_'));
+    const val = el ? parseFloat(el.value)||0 : 0;
+    if (val > 0) {
+      STATE.budgets[cat] = STATE.budgets[cat] || {};
+      STATE.budgets[cat].assigned = val;
+    } else {
+      // If cleared to 0, remove assignment
+      if (STATE.budgets[cat]) delete STATE.budgets[cat].assigned;
+    }
+  });
+  db.ref(`periods/${STATE.currentPeriodId}/data/budgets`).set(STATE.budgets);
+  closeModal('assign-modal');
+  updateSummary();
+  renderBudget();
+  showToast('✅ Asignaciones guardadas', 'success');
+}
+
+// ============================================================
 // PERIOD MANAGEMENT
 // ============================================================
 function renderPeriodList(periods) {
@@ -957,12 +1075,15 @@ function renderPeriodList(periods) {
     return;
   }
   container.innerHTML = keys.map(k => `
-    <div class="period-card" onclick="selectPeriod('${k}','${periods[k].name}')">
-      <div>
+    <div class="period-card">
+      <div class="period-card-click" onclick="selectPeriod('${k}','${periods[k].name}')">
         <div class="pc-name">${periods[k].name}</div>
         <div class="pc-date">${periods[k].createdAt||''}</div>
       </div>
-      <i class="fas fa-chevron-right" style="color:var(--text-muted)"></i>
+      <button class="period-card-del" onclick="deletePeriod('${k}','${periods[k].name}')" title="Eliminar registro">
+        <i class="fas fa-trash"></i>
+      </button>
+      <i class="fas fa-chevron-right" style="color:var(--text-muted);margin-left:4px;" onclick="selectPeriod('${k}','${periods[k].name}')" class="period-card-click"></i>
     </div>
   `).join('');
 }
@@ -975,6 +1096,28 @@ function createPeriod() {
   db.ref(`periods/${id}`).set({ name, createdAt: now }).then(() => {
     selectPeriod(id, name);
   });
+}
+
+function deletePeriod(id, name) {
+  document.getElementById('confirm-text').textContent = `¿Eliminar el registro "${name}"? Se borrarán todos sus datos permanentemente.`;
+  document.getElementById('confirm-yes').onclick = () => {
+    closeModal('confirm-modal');
+    db.ref(`periods/${id}`).remove().then(() => {
+      if (STATE.currentPeriodId === id) {
+        STATE.currentPeriodId = null;
+        STATE.currentPeriodName = '';
+        STATE.records = {};
+        STATE.budgets = {};
+        STATE.savingsMovements = [];
+        STATE.savingsBase = 0;
+        document.getElementById('period-label').textContent = 'Sin registro activo';
+        updateSummary(); renderRecords(); renderBudget(); renderSavingsTrace();
+      }
+      db.ref('periods').once('value').then(snap => renderPeriodList(snap.val()||{}));
+      showToast('Registro eliminado', 'success');
+    });
+  };
+  showModal('confirm-modal');
 }
 
 function selectPeriod(id, name) {
@@ -1029,6 +1172,7 @@ function selectType(type) {
   populateCategorySelect();
   document.getElementById('budget-assign-wrap').style.display = 'none';
   document.getElementById('send-savings-section').style.display = 'none';
+  document.getElementById('prev-expenses-wrap').style.display = 'none';
   hideSubItems();
 }
 
@@ -1050,6 +1194,7 @@ function onCategoryChange() {
   document.getElementById('budget-assign-wrap').style.display = 'none';
   document.getElementById('send-savings-section').style.display = 'none';
   document.getElementById('amount-wrap').style.display = 'block';
+  document.getElementById('prev-expenses-wrap').style.display = 'none';
 
   if (!cat) return;
 
@@ -1069,9 +1214,51 @@ function onCategoryChange() {
       document.getElementById('detail-extra-label').textContent = 'Especificar gasto';
       document.getElementById('detail-extra-wrap').style.display = 'block';
     }
-    document.getElementById('budget-assign-wrap').style.display = 'block';
-    updateBudgetHint();
+    // Show previous expenses for this category
+    showPrevExpenses(cat);
+    // Only show inline assignment if not already assigned via modal
+    const alreadyAssigned = STATE.budgets[cat]?.assigned || 0;
+    if (alreadyAssigned === 0) {
+      document.getElementById('budget-assign-wrap').style.display = 'block';
+      updateBudgetHint();
+    }
     updateRestante();
+  }
+}
+
+function showPrevExpenses(cat) {
+  const prevRecs = Object.values(STATE.records).filter(r => r.type === 'expense' && r.category === cat);
+  const assigned = STATE.budgets[cat]?.assigned || 0;
+  const spent = calcCategorySpent(cat);
+  const available = assigned - spent;
+
+  if (prevRecs.length === 0 && assigned === 0) {
+    document.getElementById('prev-expenses-wrap').style.display = 'none';
+    return;
+  }
+  document.getElementById('prev-expenses-wrap').style.display = 'block';
+
+  let html = '';
+  if (prevRecs.length > 0) {
+    prevRecs.sort((a,b) => new Date(b.createdAt||0) - new Date(a.createdAt||0));
+    html = prevRecs.map(r => `
+      <div class="prev-expense-item">
+        <span>${r.date||''} · ${r.person||''}${r.desc ? ' · '+r.desc : ''}</span>
+        <strong style="color:var(--red);">-$${(r.amount||0).toFixed(2)}</strong>
+      </div>
+    `).join('');
+    html += `<div class="prev-expense-total">Total gastado: $${spent.toFixed(2)}</div>`;
+  } else {
+    html = '<div style="font-size:0.75rem;color:var(--text-muted);padding:4px 0;">Sin gastos previos en este rubro</div>';
+  }
+  document.getElementById('prev-expense-list').innerHTML = html;
+
+  if (assigned > 0) {
+    const hintEl = document.getElementById('category-available-hint');
+    hintEl.textContent = `💰 Puedes gastar: $${assigned.toFixed(2)} asignado - $${spent.toFixed(2)} gastado = $${Math.max(0, available).toFixed(2)} disponible`;
+    hintEl.style.color = available <= 0 ? 'var(--red)' : 'var(--green)';
+  } else {
+    document.getElementById('category-available-hint').textContent = '';
   }
 }
 
@@ -1106,6 +1293,13 @@ function updateRestante() {
       document.getElementById('sobrante-amount').textContent = `Sobrante: $${restante.toFixed(2)}`;
     } else {
       document.getElementById('send-savings-section').style.display = 'none';
+    }
+    // Update category available hint dynamically
+    if (cat) {
+      const hintEl = document.getElementById('category-available-hint');
+      const remaining = assigned - spent - amount;
+      hintEl.textContent = `💰 Puedes gastar: $${assigned.toFixed(2)} asignado - $${(spent+amount).toFixed(2)} = $${Math.max(0, remaining).toFixed(2)} disponible`;
+      hintEl.style.color = remaining < 0 ? 'var(--red)' : 'var(--green)';
     }
   } else {
     hint.textContent = '';
@@ -1259,6 +1453,7 @@ function resetForm() {
   document.getElementById('detail-extra-wrap').style.display = 'none';
   document.getElementById('budget-assign-wrap').style.display = 'none';
   document.getElementById('send-savings-section').style.display = 'none';
+  document.getElementById('prev-expenses-wrap').style.display = 'none';
   hideSubItems();
   currentPhotoData = null;
   setDefaultDate();
@@ -1503,17 +1698,70 @@ function exportPDF() {
   doc.text(`Período: ${STATE.currentPeriodName}`, 14, 22);
   doc.text(`Exportado: ${new Date().toLocaleDateString('es-EC')}`, 14, 28);
   const recs = Object.values(STATE.records);
+  // Add index column for photo reference
+  const recArray = recs.map((r, idx) => [
+    String(idx+1),
+    r.date||'',
+    r.person||'',
+    r.type==='income'?'Ingreso':'Gasto',
+    r.category||'',
+    (r.detailExtra||r.desc||''),
+    `$${(r.amount||0).toFixed(2)}`,
+    r.photo ? `Ver Foto ${idx+1}` : ''
+  ]);
   doc.autoTable({
     startY: 34,
-    head: [['Fecha','Persona','Tipo','Categoría','Detalle','Monto']],
-    body: recs.map(r => [r.date||'',r.person||'',r.type==='income'?'Ingreso':'Gasto',r.category||'',(r.detailExtra||r.desc||''),`$${(r.amount||0).toFixed(2)}`]),
-    styles: { fontSize: 8 },
-    headStyles: { fillColor: [26,39,68] }
+    head: [['#','Fecha','Persona','Tipo','Categoría','Detalle','Monto','Foto']],
+    body: recArray,
+    styles: { fontSize: 7 },
+    headStyles: { fillColor: [26,39,68] },
+    columnStyles: { 7: { cellWidth: 18, fontSize: 6, textColor: [17,138,178] } }
   });
-  const finalY = doc.lastAutoTable.finalY + 10;
+  let finalY = doc.lastAutoTable.finalY + 10;
+  doc.setFontSize(9);
   doc.text(`Total Ingresos: $${calcTotalIncome().toFixed(2)}`, 14, finalY);
   doc.text(`Total Gastos: $${calcTotalExpense().toFixed(2)}`, 14, finalY+6);
-  doc.text(`Fondo de Ahorro: $${calcSavingsTotal().toFixed(2)}`, 14, finalY+12);
+  doc.text(`Total Asignado: $${calcTotalAssigned().toFixed(2)}`, 14, finalY+12);
+  doc.text(`Fondo de Ahorro: $${calcSavingsTotal().toFixed(2)}`, 14, finalY+18);
+
+  // Add photos as annex
+  const recsWithPhotos = recs.map((r, idx) => ({...r, idx: idx+1})).filter(r => r.photo);
+  if (recsWithPhotos.length > 0) {
+    doc.addPage();
+    doc.setFontSize(12);
+    doc.setTextColor(240, 180, 41);
+    doc.text('ANEXO DE FOTOS', 14, 18);
+    doc.setTextColor(0,0,0);
+    let xPos = 14;
+    let yPos = 28;
+    const imgW = 80;
+    const imgH = 60;
+    const margin = 10;
+    const pageW = doc.internal.pageSize.getWidth();
+    recsWithPhotos.forEach((r, i) => {
+      if (xPos + imgW > pageW - 10) {
+        xPos = 14;
+        yPos += imgH + 22;
+      }
+      if (yPos + imgH + 20 > doc.internal.pageSize.getHeight() - 10) {
+        doc.addPage();
+        xPos = 14;
+        yPos = 20;
+      }
+      try {
+        const format = r.photo.includes('image/png') ? 'PNG' : 'JPEG';
+        doc.addImage(r.photo, format, xPos, yPos, imgW, imgH);
+      } catch(e) {
+        try { doc.addImage(r.photo, 'JPEG', xPos, yPos, imgW, imgH); } catch(e2) {}
+      }
+      doc.setFontSize(7);
+      doc.setTextColor(100,100,100);
+      doc.text(`Foto #${r.idx} - ${r.category}${r.detailExtra?' · '+r.detailExtra:''} - ${r.date||''} - ${r.person||''}`, xPos, yPos + imgH + 5);
+      doc.setTextColor(0,0,0);
+      xPos += imgW + margin;
+    });
+  }
+
   doc.save(`Registros_${STATE.currentPeriodName||'export'}.pdf`);
   showToast('📄 PDF exportado', 'success');
 }
